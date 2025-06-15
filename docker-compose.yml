@@ -1,0 +1,7 @@
+services:
+  go:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    platform: linux/386

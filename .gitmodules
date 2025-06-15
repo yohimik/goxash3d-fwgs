@@ -1,0 +1,6 @@
+[submodule "xash3d-fwgs"]
+	path = xash3d-fwgs
+	url = https://github.com/yohimik/webxash3d-fwgs.git
+[submodule "xashds-docker"]
+	path = xashds-docker
+	url = https://github.com/FWGS/xashds-docker.git
