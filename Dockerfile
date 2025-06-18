@@ -35,7 +35,7 @@ COPY --from=engine /xash/build/engine/libxash.a ./libxash.a
 COPY --from=engine /xash/build/public/libbuild_vcs.a ./libbuild_vcs.a
 COPY --from=engine /xash/build/public/libpublic.a ./libpublic.a
 COPY --from=engine /xash/build/3rdparty/libbacktrace/libbacktrace.a ./libbacktrace.a
-
+#-Wl,--wrap=Host_Main
 ENV GOARCH=386
 ENV CC="gcc -m32 -D__i386__"
 RUN CGO_CFLAGS="-fopenmp -m32" \
