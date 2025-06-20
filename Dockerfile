@@ -35,12 +35,12 @@ COPY --from=engine /xash/build/engine/libxash.a ./libxash.a
 COPY --from=engine /xash/build/public/libbuild_vcs.a ./libbuild_vcs.a
 COPY --from=engine /xash/build/public/libpublic.a ./libpublic.a
 COPY --from=engine /xash/build/3rdparty/libbacktrace/libbacktrace.a ./libbacktrace.a
-#-Wl,--wrap=Host_Main
+
 ENV GOARCH=386
 ENV CC="gcc -m32 -D__i386__"
-RUN CGO_CFLAGS="-fopenmp -m32" \
-    CGO_LDFLAGS="-fopenmp -m32" \
-    go build ./main.go
+ENV CGO_CFLAGS="-fopenmp -m32"
+ENV CGO_LDFLAGS="-Wl,--wrap=sendto -Wl,--wrap=recvfrom -fopenmp -m32"
+RUN go mod download && go build .
 
 
 FROM debian:bookworm-slim AS hlds
@@ -100,7 +100,7 @@ WORKDIR /xashds
 ENV LD_LIBRARY_PATH=/xashds
 
 COPY --from=hlds /opt/xash/xashds .
-COPY --from=go /go/main ./xash
+COPY --from=go /go/xash3d-fwgs ./xash
 COPY --from=engine /xash/build/filesystem/filesystem_stdio.so ./filesystem_stdio.so
 COPY --from=engine "/usr/lib/i386-linux-gnu/libstdc++.so.6" "./libstdc++.so.6"
 COPY --from=engine "/usr/lib/i386-linux-gnu/libgcc_s.so.1" "./libgcc_s.so.1"
