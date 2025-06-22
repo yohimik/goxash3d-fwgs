@@ -1,8 +1,8 @@
 services:
   go:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: examples/webrtc/Dockerfile
     restart: always
     platform: linux/386
     environment:

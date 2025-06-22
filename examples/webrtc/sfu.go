@@ -9,8 +9,8 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/yohimik/goxash3d-fwgs/pkg"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -20,7 +20,6 @@ import (
 
 var connections sync.Map
 
-// nolint
 var (
 	addr     = ":27016"
 	upgrader = websocket.Upgrader{
@@ -36,8 +35,6 @@ var (
 
 	log = logging.NewDefaultLoggerFactory().NewLogger("sfu-ws")
 )
-
-var incoming = make(chan Packet, 128)
 
 type websocketMessage struct {
 	Event string `json:"event"`
@@ -207,12 +204,10 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 		return
 	}
 
-	b1 := byte(rand.Intn(256))
-	b2 := byte(rand.Intn(256))
-	b3 := byte(rand.Intn(256))
-	b4 := byte(rand.Intn(256))
-	ip := net.IPv4(b1, b2, b3, b4)
-	ipString := ip.String()
+	ip := [4]byte{}
+	for i := range ip {
+		ip[i] = byte(rand.Intn(256))
+	}
 
 	c := &threadSafeWriter{unsafeConn, sync.Mutex{}} // nolint
 
@@ -258,16 +253,16 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 		return
 	}
 	channel.OnMessage(func(msg webrtc.DataChannelMessage) {
-		incoming <- Packet{
-			IP:   []byte{b1, b2, b3, b4},
+		goxash3d_fwgs.DefaultXash3D.Incoming <- goxash3d_fwgs.Packet{
+			IP:   ip,
 			Data: msg.Data,
 		}
 	})
 	channel.OnOpen(func() {
-		connections.Store(ipString, channel)
+		connections.Store(ip, channel)
 	})
 	defer channel.Close()
-	defer connections.Delete(ipString)
+	defer connections.Delete(ip)
 
 	// Trickle ICE. Emit server candidate to client
 	peerConnection.OnICECandidate(func(i *webrtc.ICECandidate) {
@@ -420,7 +415,6 @@ func (t *threadSafeWriter) WriteJSON(v interface{}) error {
 }
 
 func runSFU() {
-
 	settingEngine := webrtc.SettingEngine{}
 	port, ok := os.LookupEnv("PORT")
 	if ok {
@@ -489,6 +483,20 @@ func runSFU() {
 	go func() {
 		for range time.NewTicker(time.Second * 3).C {
 			dispatchKeyFrame()
+		}
+	}()
+
+	go func() {
+		for p := range goxash3d_fwgs.DefaultXash3D.Outgoing {
+			channel, ok := connections.Load(p.IP)
+			if !ok || channel == nil {
+				continue
+			}
+			c, ok := channel.(*webrtc.DataChannel)
+			if !ok {
+				continue
+			}
+			c.Send(p.Data)
 		}
 	}()
 

@@ -1,6 +1,6 @@
-module xash3d-fwgs
+module github.com/yohimik/goxash3d-fwgs/examples/webrtc
 
-go 1.24.2
+go 1.24.4
 
 require (
 	github.com/gorilla/websocket v1.5.3

@@ -13,9 +13,6 @@ COPY ./xash3d-fwgs .
 RUN ./waf configure -T release -d --enable-lto --enable-openmp \
     && ./waf build
 
-RUN find /usr/lib -name 'libgcc_s.so.1'
-
-
 FROM golang:1.24 AS go
 
 RUN dpkg --add-architecture i386
@@ -30,17 +27,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean
 
 WORKDIR /go
-COPY ./lib .
-COPY --from=engine /xash/build/engine/libxash.a ./libxash.a
-COPY --from=engine /xash/build/public/libbuild_vcs.a ./libbuild_vcs.a
-COPY --from=engine /xash/build/public/libpublic.a ./libpublic.a
-COPY --from=engine /xash/build/3rdparty/libbacktrace/libbacktrace.a ./libbacktrace.a
+COPY pkg pkg
+COPY --from=engine /xash/build/engine/libxash.a pkg/libxash.a
+COPY --from=engine /xash/build/public/libbuild_vcs.a pkg/libbuild_vcs.a
+COPY --from=engine /xash/build/public/libpublic.a pkg/libpublic.a
+COPY --from=engine /xash/build/3rdparty/libbacktrace/libbacktrace.a pkg/libbacktrace.a
+
+COPY go.mod go.mod
+COPY go.sum go.sum
+COPY go.work go.work
+COPY examples/webrtc examples/webrtc
+
+WORKDIR /go/examples/webrtc
 
 ENV GOARCH=386
 ENV CC="gcc -m32 -D__i386__"
 ENV CGO_CFLAGS="-fopenmp -m32"
 ENV CGO_LDFLAGS="-Wl,--wrap=sendto -Wl,--wrap=recvfrom -fopenmp -m32"
 RUN go mod download && go build .
+RUN ls .
 
 
 FROM debian:bookworm-slim AS hlds
@@ -79,7 +84,7 @@ WORKDIR /opt/xash/xashds
 RUN rm -rf ./cstrike
 
 # Copy default config
-COPY xashds-docker/valve valve
+COPY configs/valve valve
 
 FROM debian:bookworm-slim AS final
 
@@ -100,7 +105,7 @@ WORKDIR /xashds
 ENV LD_LIBRARY_PATH=/xashds
 
 COPY --from=hlds /opt/xash/xashds .
-COPY --from=go /go/xash3d-fwgs ./xash
+COPY --from=go /go/examples/webrtc/webrtc ./xash
 COPY --from=engine /xash/build/filesystem/filesystem_stdio.so ./filesystem_stdio.so
 COPY --from=engine "/usr/lib/i386-linux-gnu/libstdc++.so.6" "./libstdc++.so.6"
 COPY --from=engine "/usr/lib/i386-linux-gnu/libgcc_s.so.1" "./libgcc_s.so.1"
