@@ -45,7 +45,6 @@ ENV CC="gcc -m32 -D__i386__"
 ENV CGO_CFLAGS="-fopenmp -m32"
 ENV CGO_LDFLAGS="-Wl,--wrap=sendto -Wl,--wrap=recvfrom -fopenmp -m32"
 RUN go mod download && go build .
-RUN ls .
 
 
 FROM debian:bookworm-slim AS hlds
