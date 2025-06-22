@@ -1,5 +1,5 @@
 services:
-  go:
+  xash3d:
     build:
       context: ../../
       dockerfile: examples/webrtc/Dockerfile
@@ -11,3 +11,4 @@ services:
     ports:
       - "27016:27016"
       - "27017:27017"
+      - "27018:27018"
