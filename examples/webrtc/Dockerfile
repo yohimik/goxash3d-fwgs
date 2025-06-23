@@ -36,7 +36,7 @@ COPY --from=engine /xash/build/3rdparty/libbacktrace/libbacktrace.a pkg/libbackt
 COPY go.mod go.mod
 COPY go.sum go.sum
 COPY go.work go.work
-COPY examples/webrtc examples/webrtc
+COPY examples examples
 
 WORKDIR /go/examples/webrtc
 

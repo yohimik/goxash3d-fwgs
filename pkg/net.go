@@ -17,6 +17,7 @@ static void set_errno(int err) {
 */
 import "C"
 import (
+	"time"
 	"unsafe"
 )
 
@@ -55,8 +56,7 @@ func (x *Xash3DNetwork) Recvfrom(
 
 	select {
 	case pkt = <-x.Incoming:
-	default:
-		// No data available: simulate EWOULDBLOCK
+	case <-time.After(0):
 		C.set_errno(C.EAGAIN)
 		return -1
 	}
