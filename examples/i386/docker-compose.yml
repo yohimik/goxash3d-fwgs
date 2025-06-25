@@ -1,0 +1,9 @@
+services:
+  xash3d:
+    build:
+      context: ../../
+      dockerfile: examples/i386/Dockerfile
+    restart: always
+    platform: linux/386
+    ports:
+      - "27017:27017"

@@ -44,6 +44,7 @@ func NewXash3DNetwork() *Xash3DNetwork {
 
 // Recvfrom Receives packets from a custom Go channel (`Incoming`),
 // simulating non-blocking socket reads and populating sockaddr structures as needed.
+// i386 requires 10ms timeout.
 func (x *Xash3DNetwork) Recvfrom(
 	sockfd Int,
 	buf unsafe.Pointer,

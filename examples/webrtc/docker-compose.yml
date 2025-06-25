@@ -4,11 +4,5 @@ services:
       context: ../../
       dockerfile: examples/webrtc/Dockerfile
     restart: always
-    platform: linux/386
-    environment:
-      IP: 192.168.50.123
-      PORT: 27018
     ports:
       - "27016:27016"
-      - "27017:27017"
-      - "27018:27018"
