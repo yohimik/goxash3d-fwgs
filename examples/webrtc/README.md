@@ -16,8 +16,6 @@ The WebRTC networking layer is based on an example from [the Pion SFU-WS project
 
 ### Using Docker
 
-Replace `IP` environment variable in `docker-compose.yml` with your own value (local or public outside the docker container) and then run:
-
 ```shell
 docker compose up -d
 ```
