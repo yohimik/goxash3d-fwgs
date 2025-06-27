@@ -4,6 +4,8 @@ This example illustrates how to implement a dedicated Xash3D server using a cust
 
 The WebRTC networking layer is based on an example from [the Pion SFU-WS project](https://github.com/pion/example-webrtc-applications/tree/master/sfu-ws), a popular Go-based Selective Forwarding Unit library for WebRTC. This ensures robust and scalable peer communication using Go idioms.
 
+It is recommended to use this with [webxash3d-fwgs](https://github.com/yohimik/webxash3d-fwgs?tab=readme-ov-file#webrtc-online-mod).
+
 ## What This Example Shows
 
 * ✅ Initializing the Xash3D engine from Go
