@@ -14,6 +14,17 @@ It features Go-idiomatic engine structures, a custom UDP network layer (designed
 4. 🧠 Enables writing server-side game logic entirely in Go
 5. 📁 Real-world usage examples in the examples/ directory
 
+## Why Go?
+
+1. **Designed for Asynchronous Web Development**  
+   Go provides native support for concurrency with goroutines and channels, making it a strong choice for building scalable, high-performance web applications.
+
+2. **Vibrant Ecosystem and Tooling**  
+   Go has a large and active community, along with robust tooling — including built-in package management (`go mod`), formatting, and testing - that streamlines development and maintenance.
+
+3. **Powerful Game Server Support**  
+   Go has open-source, session-based game server frameworks like Nakama, which offer features not readily available in C, such as integrated authentication, matchmaking, statistics, etc.
+
 ## Getting Started
 
 To get started quickly, check out the [/examples](./examples) directory for ready-made Go modules.
