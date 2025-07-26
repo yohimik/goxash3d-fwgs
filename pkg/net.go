@@ -17,7 +17,6 @@ static void set_errno(int err) {
 */
 import "C"
 import (
-	"time"
 	"unsafe"
 )
 
@@ -48,16 +47,16 @@ func NewXash3DNetwork() *Xash3DNetwork {
 func (x *Xash3DNetwork) Recvfrom(
 	sockfd Int,
 	buf unsafe.Pointer,
-	length SizeT,
+	length Int,
 	flags Int,
 	src_addr *Sockaddr,
 	addrlen *SocklenT,
-) SsizeT {
+) Int {
 	var pkt Packet
 
 	select {
 	case pkt = <-x.Incoming:
-	case <-time.After(0):
+	default:
 		C.set_errno(C.EAGAIN)
 		return -1
 	}
@@ -78,7 +77,7 @@ func (x *Xash3DNetwork) Recvfrom(
 		*addrlen = SocklenT(unsafe.Sizeof(*csa))
 	}
 
-	return SsizeT(n)
+	return Int(n)
 }
 
 // Sendto Sends packet data to a custom Go channel (`Outgoing`),
@@ -86,20 +85,21 @@ func (x *Xash3DNetwork) Recvfrom(
 func (x *Xash3DNetwork) Sendto(
 	sockfd Int,
 	buf unsafe.Pointer,
-	length SizeT,
+	length Int,
 	flags Int,
 	dest unsafe.Pointer,
 	addrlen SocklenT,
-) SsizeT {
+) Int {
 	if buf == nil || dest == nil || length <= 0 {
 		return 0
 	}
 	sa := (*C.struct_sockaddr_in)(dest)
 	ipBytes := *(*[4]byte)(unsafe.Pointer(&sa.sin_addr))
-	data := C.GoBytes(buf, Int(length))
-	x.Outgoing <- Packet{
-		IP:   ipBytes,
-		Data: data,
-	}
-	return SsizeT(length)
+	byteView := unsafe.Slice((*byte)(buf), int(length))
+	packetBuf := make([]byte, length)
+	copy(packetBuf, byteView)
+
+	x.Outgoing <- Packet{IP: ipBytes, Data: packetBuf}
+
+	return Int(length)
 }
