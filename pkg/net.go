@@ -6,6 +6,7 @@ package goxash3d_fwgs
 // network behavior for use in a controlled or virtualized environment.
 
 /*
+#include "net.h"
 #include <errno.h>
 #include <stdint.h>
 #include <arpa/inet.h>
@@ -39,6 +40,11 @@ func NewXash3DNetwork() *Xash3DNetwork {
 		Incoming: make(chan Packet, ChannelSize),
 		Outgoing: make(chan Packet, ChannelSize),
 	}
+}
+
+func (x *Xash3DNetwork) RegisterNetCallbacks() {
+	C.RegisterRecvFromCallback((C.recvfrom_func_t)(C.Recvfrom))
+	C.RegisterSendToCallback((C.sendto_func_t)(C.Sendto))
 }
 
 // Recvfrom Receives packets from a custom Go channel (`Incoming`),
@@ -83,23 +89,72 @@ func (x *Xash3DNetwork) Recvfrom(
 // Sendto Sends packet data to a custom Go channel (`Outgoing`),
 // simulating outgoing UDP traffic by extracting destination IP and payload.
 func (x *Xash3DNetwork) Sendto(
+	sock C.int,
+	packets **C.char,
+	sizes *C.size_t,
+	packet_count C.int,
+	seq_num C.int,
+	to *C.struct_sockaddr_storage,
+	tolen C.size_t,
+) C.int {
+	count := int(packet_count)
+	packetArray := unsafe.Pointer(packets)
+	sizeArray := unsafe.Pointer(sizes)
+
+	// --- Extract IP address ---
+	ipBytes := extractIP(to)
+
+	// --- Iterate packets ---
+	for i := 0; i < count; i++ {
+		packetPtr := *(**C.char)(unsafe.Pointer(uintptr(packetArray) + uintptr(i)*unsafe.Sizeof(uintptr(0))))
+		packetSize := *(*C.size_t)(unsafe.Pointer(uintptr(sizeArray) + uintptr(i)*unsafe.Sizeof(C.size_t(0))))
+
+		// Use unsafe.Slice for faster copy
+		byteView := unsafe.Slice((*byte)(unsafe.Pointer(packetPtr)), int(packetSize))
+		packetBuf := make([]byte, int(packetSize))
+		copy(packetBuf, byteView)
+		x.Outgoing <- Packet{
+			IP:   ipBytes,
+			Data: packetBuf,
+		}
+	}
+
+	return 0
+}
+
+func extractIP(to *C.struct_sockaddr_storage) [4]byte {
+	family := to.ss_family
+	switch family {
+	case C.AF_INET:
+		sa := (*C.struct_sockaddr_in)(unsafe.Pointer(to))
+		ip := (*[4]byte)(unsafe.Pointer(&sa.sin_addr))
+		return *ip
+	default:
+		return [4]byte{0, 0, 0, 0}
+	}
+}
+
+//export Recvfrom
+func Recvfrom(
 	sockfd Int,
 	buf unsafe.Pointer,
 	length Int,
 	flags Int,
-	dest unsafe.Pointer,
-	addrlen SocklenT,
+	src_addr *Sockaddr,
+	addrlen *SocklenT,
 ) Int {
-	if buf == nil || dest == nil || length <= 0 {
-		return 0
-	}
-	sa := (*C.struct_sockaddr_in)(dest)
-	ipBytes := *(*[4]byte)(unsafe.Pointer(&sa.sin_addr))
-	byteView := unsafe.Slice((*byte)(buf), int(length))
-	packetBuf := make([]byte, length)
-	copy(packetBuf, byteView)
+	return DefaultXash3D.Recvfrom(sockfd, buf, length, flags, src_addr, addrlen)
+}
 
-	x.Outgoing <- Packet{IP: ipBytes, Data: packetBuf}
-
-	return Int(length)
+//export Sendto
+func Sendto(
+	sock C.int,
+	packets **C.char,
+	sizes *C.size_t,
+	packet_count C.int,
+	seq_num C.int,
+	to *C.struct_sockaddr_storage,
+	tolen C.size_t,
+) Int {
+	return DefaultXash3D.Sendto(sock, packets, sizes, packet_count, seq_num, to, tolen)
 }

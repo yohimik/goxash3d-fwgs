@@ -28,7 +28,7 @@ COPY examples examples
 WORKDIR /go/examples/webrtc
 
 ENV CGO_CFLAGS="-fopenmp"
-ENV CGO_LDFLAGS="-Wl,--wrap=sendto -Wl,--wrap=recvfrom -fopenmp"
+ENV CGO_LDFLAGS="-fopenmp"
 RUN go mod download && go build .
 
 
