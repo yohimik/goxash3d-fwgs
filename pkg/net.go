@@ -27,19 +27,25 @@ type Packet struct {
 	Data []byte
 }
 
+type RecvfromCallback func() *Packet
+type SendtoCallback func(p Packet)
+
 // Xash3DNetwork Represents network interface of Xash3D-FWGS engine.
 type Xash3DNetwork struct {
-	Incoming chan Packet
-	Outgoing chan Packet
+	recvfrom RecvfromCallback
+	sendto   SendtoCallback
 }
 
-const ChannelSize = 128
-
 func NewXash3DNetwork() *Xash3DNetwork {
-	return &Xash3DNetwork{
-		Incoming: make(chan Packet, ChannelSize),
-		Outgoing: make(chan Packet, ChannelSize),
-	}
+	return &Xash3DNetwork{}
+}
+
+func (x *Xash3DNetwork) RegisterRecvfromCallback(cb RecvfromCallback) {
+	x.recvfrom = cb
+}
+
+func (x *Xash3DNetwork) RegisterSendtoCallback(cb SendtoCallback) {
+	x.sendto = cb
 }
 
 func (x *Xash3DNetwork) RegisterNetCallbacks() {
@@ -58,13 +64,11 @@ func (x *Xash3DNetwork) Recvfrom(
 	src_addr *Sockaddr,
 	addrlen *SocklenT,
 ) Int {
-	var pkt Packet
+	pkt := x.recvfrom()
 
-	select {
-	case pkt = <-x.Incoming:
-	default:
+	if pkt == nil {
 		C.set_errno(C.EAGAIN)
-		return -1
+		return Int(-1)
 	}
 
 	n := len(pkt.Data)
@@ -89,14 +93,14 @@ func (x *Xash3DNetwork) Recvfrom(
 // Sendto Sends packet data to a custom Go channel (`Outgoing`),
 // simulating outgoing UDP traffic by extracting destination IP and payload.
 func (x *Xash3DNetwork) Sendto(
-	sock C.int,
+	sock Int,
 	packets **C.char,
 	sizes *C.size_t,
-	packet_count C.int,
-	seq_num C.int,
+	packet_count Int,
+	seq_num Int,
 	to *C.struct_sockaddr_storage,
-	tolen C.size_t,
-) C.int {
+	tolen SizeT,
+) Int {
 	count := int(packet_count)
 	packetArray := unsafe.Pointer(packets)
 	sizeArray := unsafe.Pointer(sizes)
@@ -111,15 +115,13 @@ func (x *Xash3DNetwork) Sendto(
 
 		// Use unsafe.Slice for faster copy
 		byteView := unsafe.Slice((*byte)(unsafe.Pointer(packetPtr)), int(packetSize))
-		packetBuf := make([]byte, int(packetSize))
-		copy(packetBuf, byteView)
-		x.Outgoing <- Packet{
+		x.sendto(Packet{
 			IP:   ipBytes,
-			Data: packetBuf,
-		}
+			Data: byteView,
+		})
 	}
 
-	return 0
+	return 10
 }
 
 func extractIP(to *C.struct_sockaddr_storage) [4]byte {
@@ -148,13 +150,13 @@ func Recvfrom(
 
 //export Sendto
 func Sendto(
-	sock C.int,
+	sock Int,
 	packets **C.char,
-	sizes *C.size_t,
-	packet_count C.int,
-	seq_num C.int,
+	sizes *SizeT,
+	packet_count Int,
+	seq_num Int,
 	to *C.struct_sockaddr_storage,
-	tolen C.size_t,
+	tolen SizeT,
 ) Int {
 	return DefaultXash3D.Sendto(sock, packets, sizes, packet_count, seq_num, to, tolen)
 }

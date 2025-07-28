@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/gorilla/websocket"
+	"github.com/pandaknight2021/queue"
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/logging"
@@ -10,6 +12,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/yohimik/goxash3d-fwgs/pkg"
+	"io"
 	"math/rand"
 	"net/http"
 	"os"
@@ -19,6 +22,8 @@ import (
 )
 
 var connections sync.Map
+
+var Q = queue.NewRingQueue(256)
 
 var (
 	addr     = ":27016"
@@ -194,6 +199,24 @@ func dispatchKeyFrame() {
 	}
 }
 
+const messageSize = 1024 * 8
+
+func ReadLoop(d io.Reader, ip [4]byte) {
+	for {
+		buffer := make([]byte, messageSize)
+		n, err := d.Read(buffer)
+		if err != nil {
+			fmt.Println("Datachannel closed; Exit the readloop:", err)
+
+			return
+		}
+		Q.Push(&goxash3d_fwgs.Packet{
+			IP:   ip,
+			Data: buffer[:n],
+		})
+	}
+}
+
 // Handle incoming websockets.
 func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 	// Upgrade HTTP request to Websocket
@@ -243,7 +266,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 
 	f := false
 	var z uint16 = 0
-	channel, err := peerConnection.CreateDataChannel("data", &webrtc.DataChannelInit{
+	readChannel, err := peerConnection.CreateDataChannel("read", &webrtc.DataChannelInit{
 		Ordered:        &f,
 		MaxRetransmits: &z,
 	})
@@ -252,16 +275,33 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 
 		return
 	}
-	channel.OnMessage(func(msg webrtc.DataChannelMessage) {
-		goxash3d_fwgs.DefaultXash3D.Incoming <- goxash3d_fwgs.Packet{
-			IP:   ip,
-			Data: msg.Data,
+	readChannel.OnOpen(func() {
+		d, err := readChannel.Detach()
+		if err != nil {
+			panic(err)
 		}
+		go ReadLoop(d, ip)
 	})
-	channel.OnOpen(func() {
-		connections.Store(ip, channel)
+	defer readChannel.Close()
+
+	writeChannel, err := peerConnection.CreateDataChannel("write", &webrtc.DataChannelInit{
+		Ordered:        &f,
+		MaxRetransmits: &z,
 	})
-	defer channel.Close()
+	if err != nil {
+		log.Errorf("Failed to creates a data channel: %v", err)
+
+		return
+	}
+	writeChannel.OnOpen(func() {
+		d, err := writeChannel.Detach()
+		if err != nil {
+			panic(err)
+		}
+		connections.Store(ip, d)
+	})
+	defer writeChannel.Close()
+
 	defer connections.Delete(ip)
 
 	// Trickle ICE. Emit server candidate to client
@@ -416,6 +456,7 @@ func (t *threadSafeWriter) WriteJSON(v interface{}) error {
 
 func runSFU() {
 	settingEngine := webrtc.SettingEngine{}
+	settingEngine.DetachDataChannels()
 	port, ok := os.LookupEnv("PORT")
 	if ok {
 		p, err := strconv.Atoi(port)
@@ -486,19 +527,24 @@ func runSFU() {
 		}
 	}()
 
-	go func() {
-		for p := range goxash3d_fwgs.DefaultXash3D.Outgoing {
-			channel, ok := connections.Load(p.IP)
-			if !ok || channel == nil {
-				continue
-			}
-			c, ok := channel.(*webrtc.DataChannel)
-			if !ok {
-				continue
-			}
-			c.Send(p.Data)
+	goxash3d_fwgs.DefaultXash3D.RegisterRecvfromCallback(func() *goxash3d_fwgs.Packet {
+		data := Q.Pop()
+		if data == nil {
+			return nil
 		}
-	}()
+		return data.(*goxash3d_fwgs.Packet)
+	})
+	goxash3d_fwgs.DefaultXash3D.RegisterSendtoCallback(func(p goxash3d_fwgs.Packet) {
+		channel, ok := connections.Load(p.IP)
+		if !ok || channel == nil {
+			return
+		}
+		c, ok := channel.(io.Writer)
+		if !ok {
+			return
+		}
+		c.Write(p.Data)
+	})
 
 	// start HTTP server
 	if err := http.ListenAndServe(addr, nil); err != nil { //nolint: gosec

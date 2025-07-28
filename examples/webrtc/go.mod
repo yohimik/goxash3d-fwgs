@@ -4,12 +4,14 @@ go 1.24.4
 
 require (
 	github.com/gorilla/websocket v1.5.3
+	github.com/pandaknight2021/queue v0.1.1
 	github.com/pion/ice/v4 v4.0.10
 	github.com/pion/interceptor v0.1.40
 	github.com/pion/logging v0.2.3
 	github.com/pion/rtcp v1.2.15
 	github.com/pion/rtp v1.8.19
 	github.com/pion/webrtc/v4 v4.1.2
+	github.com/yohimik/goxash3d-fwgs v0.0.0-20250727140444-8037c682bae2
 )
 
 require (
