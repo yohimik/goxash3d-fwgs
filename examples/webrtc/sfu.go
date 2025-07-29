@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-var connections sync.Map
+var connections *FixedArray[io.Writer]
 
 var Q = queue.NewRingQueue(256)
 
@@ -227,11 +227,6 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 		return
 	}
 
-	ip := [4]byte{}
-	for i := range ip {
-		ip[i] = byte(rand.Intn(256))
-	}
-
 	c := &threadSafeWriter{unsafeConn, sync.Mutex{}} // nolint
 
 	// When this frame returns close the Websocket
@@ -275,6 +270,17 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 
 		return
 	}
+	ip := [4]byte{}
+	for i := range ip {
+		ip[i] = byte(rand.Intn(256))
+	}
+	index, err := connections.Add(nil)
+	if err != nil {
+		log.Errorf("Failed to add connection: %v", err)
+		return
+	}
+	ip[0] = index
+
 	readChannel.OnOpen(func() {
 		d, err := readChannel.Detach()
 		if err != nil {
@@ -298,11 +304,11 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 		if err != nil {
 			panic(err)
 		}
-		connections.Store(ip, d)
+		connections.Replace(index, d)
 	})
 	defer writeChannel.Close()
 
-	defer connections.Delete(ip)
+	defer connections.Remove(ip[0])
 
 	// Trickle ICE. Emit server candidate to client
 	peerConnection.OnICECandidate(func(i *webrtc.ICECandidate) {
@@ -457,6 +463,7 @@ func (t *threadSafeWriter) WriteJSON(v interface{}) error {
 func runSFU() {
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.DetachDataChannels()
+
 	port, ok := os.LookupEnv("PORT")
 	if ok {
 		p, err := strconv.Atoi(port)
@@ -474,37 +481,20 @@ func runSFU() {
 		settingEngine.SetNAT1To1IPs([]string{ip}, webrtc.ICECandidateTypeHost)
 	}
 
+	playersCountRaw, ok := os.LookupEnv("PLAYERS_COUNT")
+	playersCount := 12
+	if ok {
+		p, err := strconv.Atoi(playersCountRaw)
+		if err == nil {
+			playersCount = p
+		}
+	}
+	connections = NewFixedArray[io.Writer](byte(playersCount))
+
 	m := &webrtc.MediaEngine{}
-	err := m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: "video/VP8", ClockRate: 90000, Channels: 0, SDPFmtpLine: "", RTCPFeedback: []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}}},
-		PayloadType:        96,
-	}, webrtc.RTPCodecTypeVideo)
+	err := m.RegisterDefaultCodecs()
 	if err != nil {
 		panic(err)
-	}
-
-	for _, codec := range []webrtc.RTPCodecParameters{
-		{
-			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1"},
-			PayloadType:        111,
-		},
-		{
-			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeG722, ClockRate: 8000},
-			PayloadType:        9,
-		},
-		{
-			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000},
-			PayloadType:        0,
-		},
-		{
-			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000},
-			PayloadType:        8,
-		},
-	} {
-		err = m.RegisterCodec(codec, webrtc.RTPCodecTypeAudio)
-		if err != nil {
-			panic(err)
-		}
 	}
 
 	i := &interceptor.Registry{}
@@ -535,15 +525,11 @@ func runSFU() {
 		return data.(*goxash3d_fwgs.Packet)
 	})
 	goxash3d_fwgs.DefaultXash3D.RegisterSendtoCallback(func(p goxash3d_fwgs.Packet) {
-		channel, ok := connections.Load(p.IP)
-		if !ok || channel == nil {
+		channel, err := connections.Get(p.IP[0])
+		if err != nil || channel == nil {
 			return
 		}
-		c, ok := channel.(io.Writer)
-		if !ok {
-			return
-		}
-		c.Write(p.Data)
+		channel.Write(p.Data)
 	})
 
 	// start HTTP server

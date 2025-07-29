@@ -11,7 +11,9 @@ int host_Main( int argc, char **argv, const char *progname, int bChangeGame ) {
 
 */
 import "C"
-import "unsafe"
+import (
+	"unsafe"
+)
 
 // HostMain Runs Xash3D main loop
 func (x *Xash3D) HostMain(args []string, gameDir string, bChangeGame int) int {
