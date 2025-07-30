@@ -1,10 +1,9 @@
-module github.com/yohimik/goxash3d-fwgs/examples/webrtc
+module github.com/yohimik/goxash3d-fwgs/examples/webrtc-cs
 
 go 1.24.4
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	github.com/pandaknight2021/queue v0.1.1
 	github.com/pion/ice/v4 v4.0.10
 	github.com/pion/interceptor v0.1.40
 	github.com/pion/logging v0.2.3

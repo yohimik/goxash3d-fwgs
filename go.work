@@ -2,6 +2,7 @@ go 1.24.4
 
 use (
 	.
-	./examples/webrtc
+	./examples/webrtc-hl
+	./examples/webrtc-cs-i386
 	./examples/i386
 )

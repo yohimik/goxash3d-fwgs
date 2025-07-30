@@ -2,7 +2,8 @@ services:
   xash3d:
     build:
       context: ../../
-      dockerfile: examples/webrtc/Dockerfile
+      dockerfile: examples/webrtc-cs-i386/Dockerfile
     restart: always
+    platform: linux/386
     ports:
       - "27016:27016"
