@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim AS engine
+FROM debian:trixie-slim AS engine
 
 RUN apt update && apt upgrade -y && apt -y --no-install-recommends install aptitude
 RUN aptitude -y --without-recommends install git build-essential ca-certificates libsdl2-dev \
@@ -32,7 +32,7 @@ ENV CGO_LDFLAGS="-fopenmp"
 RUN go mod download && go build .
 
 
-FROM debian:bookworm-slim AS hlds
+FROM debian:trixie-slim AS hlds
 
 RUN apt update && apt upgrade -y && apt -y --no-install-recommends install aptitude
 RUN aptitude -y --without-recommends install git ca-certificates cmake build-essential libsdl2-dev
@@ -79,7 +79,7 @@ RUN rm -rf ./cstrike
 # Copy default config
 COPY configs/valve valve
 
-FROM debian:bookworm-slim AS final
+FROM debian:trixie-slim AS final
 
 ENV XASH3D_BASEDIR=/xashds
 

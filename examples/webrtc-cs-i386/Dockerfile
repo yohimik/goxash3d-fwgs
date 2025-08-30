@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim AS engine
+FROM debian:trixie-slim AS engine
 
 RUN dpkg --add-architecture i386
 RUN apt update && apt upgrade -y && apt -y --no-install-recommends install aptitude
@@ -36,7 +36,7 @@ ENV CGO_LDFLAGS="-fopenmp -m32"
 RUN go mod download && go build .
 
 
-FROM debian:bookworm-slim AS hlds
+FROM debian:trixie-slim AS hlds
 
 ARG hlds_build=8308
 ARG hlds_url="https://github.com/DevilBoy-eXe/hlds/releases/download/$hlds_build/hlds_build_$hlds_build.zip"
@@ -73,7 +73,7 @@ WORKDIR /opt/xash/xashds
 COPY configs/valve valve
 COPY configs/cstrike cstrike
 
-FROM debian:bookworm-slim AS final
+FROM debian:trixie-slim AS final
 
 ENV XASH3D_BASEDIR=/xashds
 
