@@ -18,7 +18,7 @@ import (
 // HostMain Runs Xash3D main loop
 func (x *Xash3D) HostMain(args []string, gameDir string, bChangeGame int) int {
 	argsCount := len(args)
-	argc := Int(argsCount)
+	argc := C.int(argsCount)
 	argv := make([]*C.char, argsCount+1) // +1 for NULL terminator
 	for i, arg := range args {
 		argv[i] = C.CString(arg)
@@ -35,5 +35,5 @@ func (x *Xash3D) HostMain(args []string, gameDir string, bChangeGame int) int {
 		C.free(unsafe.Pointer(cGameDir))
 	}()
 
-	return int(C.host_Main(argc, &argv[0], cGameDir, Int(bChangeGame)))
+	return int(C.host_Main(argc, &argv[0], cGameDir, C.int(bChangeGame)))
 }

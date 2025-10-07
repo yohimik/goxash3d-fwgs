@@ -1,162 +1,152 @@
 package goxash3d_fwgs
 
-// Provides custom implementations of low-level network I/O functions
-// by wrapping standard C socket functions `recvfrom` and `sendto`. These replacements
-// integrate with a user-defined packet handling system to simulate
-// network behavior for use in a controlled or virtualized environment.
-
 /*
-#include "net.h"
-#include <errno.h>
-#include <stdint.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-
-static void set_errno(int err) {
-	errno = err;
-}
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
 */
 import "C"
+
 import (
 	"unsafe"
 )
 
-// Packet Represents a UDP network message
-type Packet struct {
-	IP   [4]byte
-	Data []byte
-}
-
-type RecvfromCallback func() *Packet
-type SendtoCallback func(p Packet)
-
-// Xash3DNetwork Represents network interface of Xash3D-FWGS engine.
-type Xash3DNetwork struct {
-	recvfrom RecvfromCallback
-	sendto   SendtoCallback
-}
-
-func NewXash3DNetwork() *Xash3DNetwork {
-	return &Xash3DNetwork{}
-}
-
-func (x *Xash3DNetwork) RegisterRecvfromCallback(cb RecvfromCallback) {
-	x.recvfrom = cb
-}
-
-func (x *Xash3DNetwork) RegisterSendtoCallback(cb SendtoCallback) {
-	x.sendto = cb
-}
-
-func (x *Xash3DNetwork) RegisterNetCallbacks() {
-	C.RegisterRecvFromCallback((C.recvfrom_func_t)(C.Recvfrom))
-	C.RegisterSendToCallback((C.sendto_func_t)(C.Sendto))
-}
-
-// Recvfrom Receives packets from a custom Go channel (`Incoming`),
-// simulating non-blocking socket reads and populating sockaddr structures as needed.
-// i386 requires 10ms timeout.
-func (x *Xash3DNetwork) Recvfrom(
-	sockfd Int,
-	buf unsafe.Pointer,
-	length Int,
-	flags Int,
-	src_addr *Sockaddr,
-	addrlen *SocklenT,
-) Int {
-	pkt := x.recvfrom()
-
-	if pkt == nil {
-		C.set_errno(C.EAGAIN)
-		return Int(-1)
+//export go_net_socket
+func go_net_socket(domain, typ, proto C.int) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.socket(domain, typ, proto)
 	}
-
-	n := len(pkt.Data)
-	if n > int(length) {
-		n = int(length) // truncate
-	}
-	dst := unsafe.Slice((*byte)(buf), n)
-	copy(dst, pkt.Data)
-
-	if src_addr != nil && addrlen != nil {
-		csa := (*C.struct_sockaddr_in)(unsafe.Pointer(src_addr))
-		csa.sin_family = C.AF_INET
-		csa.sin_port = C.htons(12345) // dummy port
-		ip := uint32(pkt.IP[0])<<24 | uint32(pkt.IP[1])<<16 | uint32(pkt.IP[2])<<8 | uint32(pkt.IP[3])
-		csa.sin_addr.s_addr = C.uint32_t(C.htonl(C.uint32_t(ip)))
-		*addrlen = SocklenT(unsafe.Sizeof(*csa))
-	}
-
-	return Int(n)
+	return C.int(DefaultXash3D.Net.Socket(int(domain), int(typ), int(proto)))
 }
 
-// Sendto Sends packet data to a custom Go channel (`Outgoing`),
-// simulating outgoing UDP traffic by extracting destination IP and payload.
-func (x *Xash3DNetwork) Sendto(
-	sock Int,
+//export go_net_closesocket
+func go_net_closesocket(fd C.int) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.closesocket(fd)
+	}
+	return C.int(DefaultXash3D.Net.CloseSocket(int(fd)))
+}
+
+//export go_net_sendto
+func go_net_sendto(fd C.int, buf unsafe.Pointer, len C.size_t, flags C.int, sockaddr unsafe.Pointer, socklen C.socklen_t) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.sendto(fd, buf, len, flags, sockaddr, socklen)
+	}
+	data := unsafe.Slice((*byte)(buf), len) // Directly use C buffer as Go slice
+	addr := unsafe.Slice((*byte)(sockaddr), socklen)
+	return C.int(DefaultXash3D.Net.SendTo(int(fd), data, int(flags), addr))
+}
+
+//export go_net_sendto_batch
+func go_net_sendto_batch(
+	fd C.int,
 	packets **C.char,
-	sizes *C.size_t,
-	packet_count Int,
-	seq_num Int,
+	sizes *C.int,
+	count C.int,
+	flags C.int,
 	to *C.struct_sockaddr_storage,
-	tolen SizeT,
-) Int {
-	count := int(packet_count)
-	packetArray := unsafe.Pointer(packets)
-	sizeArray := unsafe.Pointer(sizes)
+	tolen C.int,
+) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.sendto_batch(fd, packets, sizes, count, flags, to, tolen)
+	}
+	// Build Go slice headers for packet pointers and sizes (no allocations)
+	pktPtrs := unsafe.Slice(packets, count)
+	sz := unsafe.Slice(sizes, count)
 
-	// --- Extract IP address ---
-	ipBytes := extractIP(to)
+	// Use sockaddr directly (no copy)
+	sa := unsafe.Slice((*byte)(unsafe.Pointer(to)), tolen)
 
-	// --- Iterate packets ---
-	for i := 0; i < count; i++ {
-		packetPtr := *(**C.char)(unsafe.Pointer(uintptr(packetArray) + uintptr(i)*unsafe.Sizeof(uintptr(0))))
-		packetSize := *(*C.size_t)(unsafe.Pointer(uintptr(sizeArray) + uintptr(i)*unsafe.Sizeof(C.size_t(0))))
-
-		// Use unsafe.Slice for faster copy
-		byteView := unsafe.Slice((*byte)(unsafe.Pointer(packetPtr)), int(packetSize))
-		x.sendto(Packet{
-			IP:   ipBytes,
-			Data: byteView,
-		})
+	flagsInt := int(flags)
+	fdInt := int(fd)
+	n := 0
+	for i := 0; i < int(count); i++ {
+		n += DefaultXash3D.Net.SendTo(fdInt, unsafe.Slice((*byte)(unsafe.Pointer(pktPtrs[i])), int(sz[i])), flagsInt, sa)
 	}
 
-	return 10
+	return C.int(n)
 }
 
-func extractIP(to *C.struct_sockaddr_storage) [4]byte {
-	family := to.ss_family
-	switch family {
-	case C.AF_INET:
-		sa := (*C.struct_sockaddr_in)(unsafe.Pointer(to))
-		ip := (*[4]byte)(unsafe.Pointer(&sa.sin_addr))
-		return *ip
-	default:
-		return [4]byte{0, 0, 0, 0}
+//export go_net_recvfrom
+func go_net_recvfrom(fd C.int, buf unsafe.Pointer, len C.size_t, flags C.int, sockaddr unsafe.Pointer, socklen *C.socklen_t) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.recvfrom(fd, buf, len, flags, sockaddr, socklen)
 	}
+	goBuf := unsafe.Slice((*byte)(buf), len) // use C buffer directly
+	n, sa := DefaultXash3D.Net.RecvFrom(int(fd), goBuf, int(flags))
+	if n < 0 {
+		return -1
+	}
+	if sockaddr != nil && socklen != nil && len(sa) > 0 {
+		copyLen := int(*socklen)
+		if copyLen > len(sa) {
+			copyLen = len(sa)
+		}
+		C.memcpy(sockaddr, unsafe.Pointer(&sa[0]), C.size_t(copyLen))
+		*socklen = C.socklen_t(copyLen)
+	}
+	return C.int(n)
 }
 
-//export Recvfrom
-func Recvfrom(
-	sockfd Int,
-	buf unsafe.Pointer,
-	length Int,
-	flags Int,
-	src_addr *Sockaddr,
-	addrlen *SocklenT,
-) Int {
-	return DefaultXash3D.Recvfrom(sockfd, buf, length, flags, src_addr, addrlen)
+//export go_net_bind
+func go_net_bind(fd C.int, sockaddr unsafe.Pointer, socklen C.socklen_t) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.bind(fd, sockaddr, socklen)
+	}
+	sa := C.GoBytes(sockaddr, C.int(socklen))
+	return C.int(DefaultXash3D.Net.Bind(int(fd), sa))
 }
 
-//export Sendto
-func Sendto(
-	sock Int,
-	packets **C.char,
-	sizes *SizeT,
-	packet_count Int,
-	seq_num Int,
-	to *C.struct_sockaddr_storage,
-	tolen SizeT,
-) Int {
-	return DefaultXash3D.Sendto(sock, packets, sizes, packet_count, seq_num, to, tolen)
+//export go_net_getsockname
+func go_net_getsockname(fd C.int, sockaddr unsafe.Pointer, socklen *C.socklen_t) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.getsockname(fd, sockaddr, socklen)
+	}
+	sa, n := DefaultXash3D.Net.GetSockName(int(fd))
+	if sockaddr != nil && socklen != nil && n > 0 {
+		copyLen := int(*socklen)
+		if copyLen > len(sa) {
+			copyLen = len(sa)
+		}
+		C.memcpy(sockaddr, unsafe.Pointer(&sa[0]), C.size_t(copyLen))
+		*socklen = C.socklen_t(copyLen)
+	}
+	return 0
+}
+
+//export go_net_gethostbyname
+func go_net_gethostbyname(hostname *C.char) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.gethostbyname(hostname)
+	}
+	goHost := C.GoString(hostname)
+	return C.int(DefaultXash3D.Net.GetHostByName(goHost))
+}
+
+//export go_net_gethostname
+func go_net_gethostname(name *C.char, namelen C.size_t) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.gethostname(name, namelen)
+	}
+	buf := make([]byte, int(namelen))
+	n := DefaultXash3D.Net.GetHostName(buf)
+	if n < 0 {
+		return -1
+	}
+	if name != nil {
+		C.memcpy(unsafe.Pointer(name), unsafe.Pointer(&buf[0]), C.size_t(n))
+	}
+	return C.int(n)
+}
+
+//export go_net_getaddrinfo
+func go_net_getaddrinfo(hostname, service *C.char, hints, result unsafe.Pointer) C.int {
+	if DefaultXash3D.Net == nil {
+		return C.getaddrinfo(hostname, service, hints, result)
+	}
+	host := C.GoString(hostname)
+	svc := C.GoString(service)
+	return C.int(DefaultXash3D.Net.GetAddrInfo(host, svc, uintptr(hints), uintptr(result)))
 }
