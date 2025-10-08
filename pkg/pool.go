@@ -18,8 +18,8 @@ type slot struct {
 	_pad [3]byte
 }
 
-// Pool holds the bounded lock-free pool of byte indexes.
-type Pool struct {
+// BytesPool holds the bounded lock-free pool of byte indexes.
+type BytesPool struct {
 	mask uint32
 	_0   [56]byte // pad to avoid false sharing with other vars
 
@@ -32,9 +32,9 @@ type Pool struct {
 	slots []slot
 }
 
-// NewPacketPool creates a new Pool with capacity `n`. n must be a power of two and <= 256.
+// NewBytesPool creates a new BytesPool with capacity `n`. n must be a power of two and <= 256.
 // The pool will be empty initially; call Prefill or Put to add indexes.
-func NewPacketPool(n int) *Pool {
+func NewBytesPool(n int) *BytesPool {
 	if n <= 0 || n > 256 || (n&(n-1)) != 0 {
 		panic("indexpool: capacity must be power of two and 1..256")
 	}
@@ -43,7 +43,7 @@ func NewPacketPool(n int) *Pool {
 		// initialize seq to i so that slot is "available" to producers
 		slots[i].seq = uint32(i)
 	}
-	return &Pool{
+	return &BytesPool{
 		mask:  uint32(n - 1),
 		slots: slots,
 	}
@@ -52,7 +52,7 @@ func NewPacketPool(n int) *Pool {
 // Prefill fills the pool with the bytes 0..count-1 in order (useful to populate
 // free index pool). count must be <= capacity. This is done with simple puts
 // and may be used during initialization before heavy concurrency begins.
-func (p *Pool) Prefill(count int) {
+func (p *BytesPool) Prefill(count int) {
 	if count < 0 || count > len(p.slots) {
 		panic("indexpool: Prefill count out of range")
 	}
@@ -69,7 +69,7 @@ func (p *Pool) Prefill(count int) {
 
 // TryPut attempts to return an index (byte) back into the pool.
 // On success returns nil. If the pool is full returns ErrPoolFull.
-func (p *Pool) TryPut(v uint8) error {
+func (p *BytesPool) TryPut(v uint8) error {
 	var spin int
 	for {
 		head := atomic.LoadUint32(&p.head)
@@ -105,7 +105,7 @@ func (p *Pool) TryPut(v uint8) error {
 
 // TryGet attempts to retrieve an index from the pool. On success returns the byte
 // and nil error. If pool is empty returns ErrPoolEmpty.
-func (p *Pool) TryGet() (uint8, error) {
+func (p *BytesPool) TryGet() (uint8, error) {
 	var spin int
 	for {
 		tail := atomic.LoadUint32(&p.tail)
@@ -138,4 +138,4 @@ func (p *Pool) TryGet() (uint8, error) {
 }
 
 // Capacity returns the configured capacity of the pool.
-func (p *Pool) Capacity() int { return len(p.slots) }
+func (p *BytesPool) Capacity() int { return len(p.slots) }

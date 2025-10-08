@@ -7,13 +7,6 @@ import (
 	"time"
 )
 
-// Packet is the concrete payload.
-type Packet struct {
-	Data []byte
-	IP   [4]byte
-	Port int32
-}
-
 // -----------------------------
 // PacketQueue: Vyukov-style bounded MPSC storing Packet directly
 // - i386-safe: uses uint32 atomics
