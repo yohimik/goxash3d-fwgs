@@ -5,50 +5,60 @@ import (
 	"runtime"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
-var (
-	ErrFull   = errors.New("mpscqueue: full")
-	ErrClosed = errors.New("mpscqueue: closed")
-)
+// Packet is the concrete payload.
+type Packet struct {
+	Data []byte
+	IP   [4]byte
+	Port int32
+}
 
-// cacheLinePad to avoid false sharing on 32-bit (64 bytes).
-type cacheLinePad [16]uint32
+// -----------------------------
+// PacketQueue: Vyukov-style bounded MPSC storing Packet directly
+// - i386-safe: uses uint32 atomics
+// - cacheline padding to reduce false sharing
+// - adaptive spin/backoff instead of unconditional Gosched
+// - optional clearing of slot on dequeue to avoid keeping references
+// -----------------------------
 
-// cell is one ring slot. seq is a uint32 sequence number used by Vyukov algorithm.
-// val is stored as an unsafe.Pointer to avoid interface{} atomicity and writer races.
-// For convenience the public API accepts interface{} and converts to unsafe.Pointer.
-// For the absolute fastest path, change `interface{}` handling to store concrete types
-// (e.g., *Packet) and avoid boxing.
-type cell struct {
+const cacheLine = 64
+
+type pktCell struct {
+	// seq is a ticket-style sequence number.
 	seq uint32
-	// 32-bit aligned pointer on 386; using unsafe.Pointer so we can store any pointer-sized value.
-	val unsafe.Pointer
+	// pad so val doesn't share cacheline with seq on some archs.
+	_pad0 [cacheLine - 4]byte
+	val   Packet
+	// pad to avoid neighboring cell sharing (cells are in a slice though).
+	_pad1 [0]byte
 }
 
-// MPSCQueue is a bounded non-blocking MPSC queue.
-type MPSCQueue struct {
-	_headPad cacheLinePad
-	head     uint32 // consumer index (only touched by consumer)
-
-	_tailPad cacheLinePad
-	tail     uint32 // producer index (atomic add)
-
+// PacketQueue is a bounded MPSC queue of Packet. Capacity must be power of two.
+type PacketQueue struct {
 	mask uint32
-	buf  []cell
+	buf  []pktCell
 
-	closed uint32 // 0 = open, 1 = closed (atomic)
+	// pad before head to separate cache lines
+	_headPad [cacheLine]byte
+	head     uint32 // consumer only
+
+	// pad between head and tail
+	_midPad [cacheLine - 4]byte
+
+	_tailPad [cacheLine]byte
+	tail     uint32 // producers use atomic.AddUint32
+	// trailing pad
+	_tailPad2 [cacheLine - 4]byte
 }
 
-// NewMPSCQueue creates a new queue with power-of-two capacity >= 2.
-func NewMPSCQueue(capacity int) *MPSCQueue {
+func NewPacketQueue(capacity int) *PacketQueue {
 	if capacity < 2 || (capacity&(capacity-1)) != 0 {
-		panic("mpscqueue: capacity must be a power of two and >= 2")
+		panic("NewPacketQueue: capacity must be power of two and >=2")
 	}
-	q := &MPSCQueue{
+	q := &PacketQueue{
 		mask: uint32(capacity - 1),
-		buf:  make([]cell, capacity),
+		buf:  make([]pktCell, capacity),
 	}
 	for i := range q.buf {
 		q.buf[i].seq = uint32(i)
@@ -56,137 +66,99 @@ func NewMPSCQueue(capacity int) *MPSCQueue {
 	return q
 }
 
-// Close marks queue closed. Producers will get ErrClosed on Enqueue attempts.
-// Consumer can still drain remaining items.
-func (q *MPSCQueue) Close() {
-	atomic.StoreUint32(&q.closed, 1)
-}
+var ErrPacketQueueFull = errors.New("packetqueue: full")
 
-func (q *MPSCQueue) isClosed() bool {
-	return atomic.LoadUint32(&q.closed) != 0
-}
-
-// helper to convert interface{} to unsafe.Pointer (nil safe)
-func ifaceToPtr(v interface{}) unsafe.Pointer {
-	if v == nil {
-		return nil
+// smallSpinLoop: do a few iterations of "pause" (busy) before yielding.
+// On Go we don't have PAUSE instruction accessportably, so we just loop.
+func smallSpinLoop(iter int) {
+	for i := 0; i < iter; i++ {
+		// trivial no-op to keep CPU busy for a few cycles.
+		// compiler will not optimize this empty loop away because it's observable by time.
 	}
-	return unsafe.Pointer(&v)
 }
 
-// helper to convert pointer stored back to interface{}.
-// Note: because we store the temporary address of an interface value above we must
-// reconstruct the original value. To avoid double-allocation in hot paths, replace
-// queue storage with concrete pointers (e.g., *Packet) and cast directly.
-func ptrToIface(p unsafe.Pointer) interface{} {
-	if p == nil {
-		return nil
-	}
-	// p points to a temporary interface value; read it.
-	return *(*interface{})(p)
-}
-
-// Enqueue attempts a non-blocking push. Returns ErrFull if the queue is full, ErrClosed if closed.
-// This is the ultra-fast path intended for hot producers; it never blocks or syscalls.
-func (q *MPSCQueue) Enqueue(v interface{}) error {
-	if q.isClosed() {
-		return ErrClosed
-	}
-	// reserve slot
+// Enqueue pushes a Packet into the queue (non-blocking). Multiple producers safe.
+func (q *PacketQueue) Enqueue(p Packet) error {
+	// reserve a slot (fetch-and-increment)
 	pos := atomic.AddUint32(&q.tail, 1) - 1
-	idx := pos & q.mask
-	cell := &q.buf[idx]
-	// spin once or twice waiting for slot to be available
-	seq := atomic.LoadUint32(&cell.seq)
-	// expected sequence for a free slot is pos
-	if seq != pos {
-		// fast-fail: determine queue full by comparing distance between tail and head
-		// If seq < pos it's not ready. We attempt a bounded spin to avoid immediate failure
-		// for transient contention.
-		spins := 0
-		for seq != pos {
-			spins++
-			if spins < 4 {
-				runtime.Gosched()
-				seq = atomic.LoadUint32(&cell.seq)
-				continue
-			}
-			// final check: if seq < pos then slot hasn't been consumed -> full
-			if seq < pos {
-				return ErrFull
-			}
-			// otherwise reload and retry a few times
-			seq = atomic.LoadUint32(&cell.seq)
-		}
-	}
-	// slot owned; store value (as pointer) and publish by setting seq = pos+1
-	ptr := ifaceToPtr(v)
-	atomic.StorePointer(&cell.val, ptr)
-	atomic.StoreUint32(&cell.seq, pos+1)
-	return nil
-}
+	mask := q.mask
+	cell := &q.buf[pos&mask]
 
-// EnqueueSpin is a utility producers can use if they prefer waiting with backoff.
-// It returns ErrClosed if queue closed while spinning.
-func (q *MPSCQueue) EnqueueSpin(v interface{}, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	// spin / backoff
+	spin := 0
 	for {
-		err := q.Enqueue(v)
-		if err == nil {
+		seq := atomic.LoadUint32(&cell.seq)
+		if seq == pos {
+			// slot free for us
+			// store payload
+			cell.val = p
+			// publish: make visible to consumer
+			atomic.StoreUint32(&cell.seq, pos+1)
 			return nil
 		}
-		if err == ErrClosed {
-			return ErrClosed
+		// seq < pos  => slot still not consumed (full)
+		// seq > pos  => another producer raced ahead and already took this slot (shouldn't happen because pos unique)
+		if seq < pos {
+			// queue full
+			return ErrPacketQueueFull
 		}
-		// backoff strategy: yield a bit then retry until deadline
-		runtime.Gosched()
-		if time.Now().After(deadline) {
-			return ErrFull
+		// backoff strategy: a few busy loops then yield
+		spin++
+		if spin < 8 {
+			smallSpinLoop(10 << uint(spin)) // grow the busy loop a bit
+		} else if (spin & 15) == 0 {
+			// less frequent OS scheduler yield
+			runtime.Gosched()
+		} else {
+			// brief sleep to avoid burning CPU in extreme contention (very rare for MPSC)
+			time.Sleep(time.Microsecond)
 		}
 	}
 }
 
-// TryDequeue is the non-blocking consumer pop. Returns (item, true) if success.
-// If empty returns (nil, false). Consumer is expected to be single-threaded.
-func (q *MPSCQueue) TryDequeue() (interface{}, bool) {
+// TryDequeue pops a Packet in consumer (single) context. Returns (pkt,true) or (zero,false).
+func (q *PacketQueue) TryDequeue() (Packet, bool) {
 	pos := q.head
-	idx := pos & q.mask
-	cell := &q.buf[idx]
+	cell := &q.buf[pos&q.mask]
 	seq := atomic.LoadUint32(&cell.seq)
 	if seq == pos+1 {
-		// slot ready
-		p := atomic.LoadPointer(&cell.val)
-		// clear val for GC and reuse
-		atomic.StorePointer(&cell.val, nil)
-		// publish slot as free: seq = pos + mask + 1
+		// read payload
+		val := cell.val
+
+		// Optional: clear the slot's value to avoid keeping references to underlying memory.
+		// This can help GC for long-lived queues when packets hold large buffers.
+		// Clear before releasing the slot to ensure producer does not see old references.
+		cell.val = Packet{}
+
+		// mark slot free for producers: seq = pos + mask + 1
 		atomic.StoreUint32(&cell.seq, pos+q.mask+1)
 		q.head = pos + 1
-		return ptrToIface(p), true
+		return val, true
 	}
-	return nil, false
+	var zero Packet
+	return zero, false
 }
 
-// Drain calls handler for each available item and returns number processed.
-// This reduces per-item overhead by avoiding repeated Go-level loops in user code.
-func (q *MPSCQueue) Drain(handler func(interface{})) int {
+// DrainPackets processes available packets with handler and returns count.
+func (q *PacketQueue) DrainPackets(handler func(Packet)) int {
 	count := 0
 	for {
-		item, ok := q.TryDequeue()
+		pkt, ok := q.TryDequeue()
 		if !ok {
 			break
 		}
-		handler(item)
+		handler(pkt)
 		count++
 	}
 	return count
 }
 
-// Len returns approximate number of items in queue.
-func (q *MPSCQueue) Len() int {
+// Len returns an approximate count of items in the queue. Only approximate during concurrent Enqueue.
+func (q *PacketQueue) Len() int {
 	t := atomic.LoadUint32(&q.tail)
-	h := atomic.LoadUint32(&q.head)
+	h := q.head // consumer-only read
+	if t < h {
+		return 0
+	}
 	return int(t - h)
 }
-
-// Cap returns capacity.
-func (q *MPSCQueue) Cap() int { return len(q.buf) }
