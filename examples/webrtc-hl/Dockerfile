@@ -11,7 +11,7 @@ COPY ./xash3d-fwgs .
 RUN ./waf configure -T release -8 -d --enable-lto --enable-openmp \
     && ./waf build
 
-FROM golang:1.24 AS go
+FROM golang:1.25.1 AS go
 
 WORKDIR /go
 COPY pkg pkg

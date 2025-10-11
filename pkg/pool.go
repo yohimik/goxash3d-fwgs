@@ -43,10 +43,12 @@ func NewBytesPool(n int) *BytesPool {
 		// initialize seq to i so that slot is "available" to producers
 		slots[i].seq = uint32(i)
 	}
-	return &BytesPool{
+	p := &BytesPool{
 		mask:  uint32(n - 1),
 		slots: slots,
 	}
+	p.Prefill(n)
+	return p
 }
 
 // Prefill fills the pool with the bytes 0..count-1 in order (useful to populate
