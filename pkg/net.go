@@ -149,59 +149,90 @@ func lib_net_sendto(fd C.int, buf unsafe.Pointer, length C.size_t, flags C.int, 
 }
 
 //export lib_net_sendto_batch
-func lib_net_sendto_batch(fd C.int, packets **C.char, sizes *C.int, count C.int, flags C.int, to *C.struct_sockaddr_storage, tolen C.int) C.int {
-	// If no Go override, implement batch by calling sendto repeatedly (portable)
+func lib_net_sendto_batch(
+	fd C.int,
+	packets **C.char,
+	sizes *C.int,
+	count C.int,
+	flags C.int,
+	to *C.struct_sockaddr_storage,
+	tolen C.int,
+) C.int {
+	if packets == nil || sizes == nil || count <= 0 {
+		return C.int(0)
+	}
+
+	ci := int(count)
+
+	// helper: get packet pointer
+	getPktPtr := func(base unsafe.Pointer, i int) *C.char {
+		ptr := (**C.char)(unsafe.Pointer(uintptr(base) + uintptr(i)*unsafe.Sizeof(uintptr(0))))
+		return *ptr
+	}
+
+	// helper: get packet size
+	getSize := func(base unsafe.Pointer, i int) C.int {
+		ptr := (*C.int)(unsafe.Pointer(uintptr(base) + uintptr(i)*unsafe.Sizeof(C.int(0))))
+		return *ptr
+	}
+
+	// -------------------------------------------------------------------------
+	// Fallback: directly use sendto() for each packet
+	// -------------------------------------------------------------------------
 	if DefaultXash3D.Net == nil {
-		if packets == nil || sizes == nil || count <= 0 {
-			return C.int(0)
-		}
-		ci := int(count)
-
-		// Access C arrays safely via pointer-to-array trick
-		pktPtrs := (*[1 << 30]*C.char)(unsafe.Pointer(packets))[:ci:ci]
-		sz := (*[1 << 30]C.int)(unsafe.Pointer(sizes))[:ci:ci]
-
 		var totalSent int64 = 0
+
 		for i := 0; i < ci; i++ {
-			if pktPtrs[i] == nil || sz[i] <= 0 {
+			p := getPktPtr(unsafe.Pointer(packets), i)
+			sz := getSize(unsafe.Pointer(sizes), i)
+			if p == nil || sz <= 0 {
 				continue
 			}
-			// Cast sockaddr_storage -> sockaddr via unsafe.Pointer
-			ret := C.sendto(fd, unsafe.Pointer(pktPtrs[i]), C.size_t(sz[i]), flags, (*C.struct_sockaddr)(unsafe.Pointer(to)), C.socklen_t(tolen))
+
+			ret := C.sendto(
+				fd,
+				unsafe.Pointer(p),
+				C.size_t(sz),
+				flags,
+				(*C.struct_sockaddr)(unsafe.Pointer(to)),
+				C.socklen_t(tolen),
+			)
+
 			if ret < 0 {
-				// return -1 on error (match typical C behavior)
-				return C.int(-1)
+				return C.int(-1) // C-style error
 			}
-			// accumulate into Go int64 and avoid direct C-type conversions
 			totalSent += int64(ret)
+		}
+
+		if totalSent > int64(^C.int(0)) {
+			return C.int(^C.int(0))
 		}
 		return C.int(totalSent)
 	}
 
-	// Use our package-level buffer to avoid allocations
-	countInt := int(count)
+	// -------------------------------------------------------------------------
+	// Optimized path: use engine’s batch send (zero-copy)
+	// -------------------------------------------------------------------------
+	countInt := ci
 	if countInt > len(sendBatch) {
 		countInt = len(sendBatch)
 	}
 
 	addr := parseIPv4Sockaddr(unsafe.Pointer(to))
 
-	if packets == nil || sizes == nil || countInt == 0 {
-		return C.int(0)
-	}
-
-	// Convert incoming C arrays to Go slices without allocation
-	pktPtrs := (*[1 << 30]*C.char)(unsafe.Pointer(packets))[:countInt:countInt]
-	sz := (*[1 << 30]C.int)(unsafe.Pointer(sizes))[:countInt:countInt]
-
 	for i := 0; i < countInt; i++ {
-		if pktPtrs[i] == nil || sz[i] <= 0 {
+		p := getPktPtr(unsafe.Pointer(packets), i)
+		sz := getSize(unsafe.Pointer(sizes), i)
+
+		if p == nil || sz <= 0 {
 			sendBatch[i].Data = nil
 			sendBatch[i].Addr = addr
 			continue
 		}
-		// Zero-copy slice referencing C memory
-		data := unsafe.Slice((*byte)(unsafe.Pointer(pktPtrs[i])), int(sz[i]))
+
+		// zero-copy slice over C memory
+		data := unsafe.Slice((*byte)(unsafe.Pointer(p)), int(sz))
+
 		sendBatch[i].Data = data
 		sendBatch[i].Addr = addr
 	}

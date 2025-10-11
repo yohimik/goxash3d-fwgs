@@ -20,9 +20,47 @@ import (
 	"time"
 )
 
-var connections *FixedArray[io.Writer]
+type SFUNet struct {
+	*goxash3d_fwgs.BaseNet
+}
 
-var packets = make(chan *goxash3d_fwgs.Packet, 256)
+func NewSFUNet() *SFUNet {
+	return &SFUNet{
+		BaseNet: goxash3d_fwgs.NewBaseNet(goxash3d_fwgs.BaseNetOptions{
+			HostName: "webxash",
+			HostID:   3000,
+		}),
+	}
+}
+
+var net = NewSFUNet()
+var pool = goxash3d_fwgs.NewBytesPool(256)
+
+func (n *SFUNet) SendTo(fd int, packet goxash3d_fwgs.Packet, flags int) int {
+	conn := connections[packet.Addr.IP[0]]
+	if conn == nil {
+		return -1
+	}
+	nn, err := conn.Write(packet.Data)
+	if err != nil {
+		return -1
+	}
+	return nn
+}
+
+func (n *SFUNet) SendToBatch(fd int, packets []goxash3d_fwgs.Packet, flags int) int {
+	sum := 0
+	for _, packet := range packets {
+		nn := n.SendTo(fd, packet, flags)
+		if nn == -1 {
+			return -1
+		}
+		sum += nn
+	}
+	return sum
+}
+
+var connections = make([]io.Writer, 256)
 
 var (
 	addr     = ":27016"
@@ -209,10 +247,13 @@ func ReadLoop(d io.Reader, ip [4]byte) {
 
 			return
 		}
-		packets <- &goxash3d_fwgs.Packet{
-			IP:   ip,
+		net.PushPacket(goxash3d_fwgs.Packet{
+			Addr: goxash3d_fwgs.Addr{
+				IP:   ip,
+				Port: 1000,
+			},
 			Data: buffer[:n],
-		}
+		})
 	}
 }
 
@@ -260,34 +301,13 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 
 	f := false
 	var z uint16 = 0
-	readChannel, err := peerConnection.CreateDataChannel("read", &webrtc.DataChannelInit{
-		Ordered:        &f,
-		MaxRetransmits: &z,
-	})
-	if err != nil {
-		log.Errorf("Failed to creates a data channel: %v", err)
-
-		return
-	}
 	ip := [4]byte{}
 	for i := range ip {
 		ip[i] = byte(rand.Intn(256))
 	}
-	index, err := connections.Add(nil)
-	if err != nil {
-		log.Errorf("Failed to add connection: %v", err)
-		return
-	}
+	index, _ := pool.TryGet()
 	ip[0] = index
-
-	readChannel.OnOpen(func() {
-		d, err := readChannel.Detach()
-		if err != nil {
-			panic(err)
-		}
-		go ReadLoop(d, ip)
-	})
-	defer readChannel.Close()
+	defer pool.TryPut(index)
 
 	writeChannel, err := peerConnection.CreateDataChannel("write", &webrtc.DataChannelInit{
 		Ordered:        &f,
@@ -298,16 +318,38 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) { // nolint
 
 		return
 	}
+	var readChannel *webrtc.DataChannel
+	defer func() {
+		if readChannel != nil {
+			readChannel.Close()
+		}
+	}()
 	writeChannel.OnOpen(func() {
 		d, err := writeChannel.Detach()
 		if err != nil {
 			panic(err)
 		}
-		connections.Replace(index, d)
+		connections[index] = d
+
+		rc, err := peerConnection.CreateDataChannel("read", &webrtc.DataChannelInit{
+			Ordered:        &f,
+			MaxRetransmits: &z,
+		})
+		if err != nil {
+			log.Errorf("Failed to creates a data channel: %v", err)
+
+			return
+		}
+		readChannel = rc
+		readChannel.OnOpen(func() {
+			d, err := readChannel.Detach()
+			if err != nil {
+				panic(err)
+			}
+			go ReadLoop(d, ip)
+		})
 	})
 	defer writeChannel.Close()
-
-	defer connections.Remove(ip[0])
 
 	// Trickle ICE. Emit server candidate to client
 	peerConnection.OnICECandidate(func(i *webrtc.ICECandidate) {
@@ -480,16 +522,6 @@ func runSFU() {
 		settingEngine.SetNAT1To1IPs([]string{ip}, webrtc.ICECandidateTypeHost)
 	}
 
-	playersCountRaw, ok := os.LookupEnv("PLAYERS_COUNT")
-	playersCount := 12
-	if ok {
-		p, err := strconv.Atoi(playersCountRaw)
-		if err == nil {
-			playersCount = p
-		}
-	}
-	connections = NewFixedArray[io.Writer](byte(playersCount))
-
 	m := &webrtc.MediaEngine{}
 	err := m.RegisterDefaultCodecs()
 	if err != nil {
@@ -515,23 +547,6 @@ func runSFU() {
 			dispatchKeyFrame()
 		}
 	}()
-
-	goxash3d_fwgs.DefaultXash3D.RegisterRecvfromCallback(func() *goxash3d_fwgs.Packet {
-		var packet *goxash3d_fwgs.Packet
-		select {
-		case packet = <-packets:
-		case <-time.After(10 * time.Millisecond):
-		}
-		return packet
-	})
-	goxash3d_fwgs.DefaultXash3D.RegisterSendtoCallback(func(p goxash3d_fwgs.Packet) {
-		channel, err := connections.Get(p.IP[0])
-		if err != nil || channel == nil {
-			return
-		}
-		channel.Write(p.Data)
-	})
-
 	// start HTTP server
 	if err := http.ListenAndServe(addr, nil); err != nil { //nolint: gosec
 		log.Errorf("Failed to start http server: %v", err)

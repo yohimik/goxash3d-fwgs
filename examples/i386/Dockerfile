@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim AS engine
+FROM debian:trixie-slim AS engine
 
 RUN dpkg --add-architecture i386
 RUN apt update && apt upgrade -y && apt -y --no-install-recommends install aptitude
@@ -13,7 +13,7 @@ COPY ./xash3d-fwgs .
 RUN ./waf configure -T release -d --enable-lto --enable-openmp \
     && ./waf build
 
-FROM golang:1.24 AS go
+FROM golang:1.25.1 AS go
 
 WORKDIR /go
 COPY pkg pkg
@@ -36,7 +36,7 @@ ENV CGO_LDFLAGS="-fopenmp -m32"
 RUN go mod download && go build .
 
 
-FROM debian:bookworm-slim AS hlds
+FROM debian:trixie-slim AS hlds
 
 ARG hlds_build=8308
 ARG hlds_url="https://github.com/DevilBoy-eXe/hlds/releases/download/$hlds_build/hlds_build_$hlds_build.zip"
@@ -74,7 +74,7 @@ RUN rm -rf ./cstrike
 # Copy default config
 COPY configs/valve valve
 
-FROM debian:bookworm-slim AS final
+FROM debian:trixie-slim AS final
 
 ENV XASH3D_BASEDIR=/xashds
 
