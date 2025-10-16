@@ -60,6 +60,7 @@ func (n *BaseNet) PushPacket(packet Packet) {
 }
 
 func (n *BaseNet) RecvFrom() *Packet {
+	Delay()
 	p, ok := n.packets.TryDequeue()
 	if !ok {
 		return nil
