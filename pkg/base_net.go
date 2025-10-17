@@ -2,6 +2,7 @@ package goxash3d_fwgs
 
 import (
 	"fmt"
+	"github.com/yohimik/goxash3d-fwgs/pkg/platform"
 	"strconv"
 	"strings"
 )
@@ -60,7 +61,7 @@ func (n *BaseNet) PushPacket(packet Packet) {
 }
 
 func (n *BaseNet) RecvFrom() *Packet {
-	Delay()
+	platform.Delay()
 	p, ok := n.packets.TryDequeue()
 	if !ok {
 		return nil
